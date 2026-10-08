@@ -13,12 +13,18 @@ const bead = (id, extra = {}) => ({
 const dep = (id, target, type = "blocks") => ({ issue_id: id, depends_on_id: target, type });
 const beads = [
   bead("new-a"), bead("new-b"), bead("finished", { status: "closed" }),
-  bead("linked-a", { assignee: "alice", dependencies: [dep("linked-a", "linked-b")] }),
-  bead("linked-b", { labels: ["infra"] }),
+  // Titles deliberately do not contain the ids, so the id-search assertion below
+  // proves id matching instead of passing on the title.
+  bead("linked-a", { title: "Alpha task", assignee: "alice", dependencies: [dep("linked-a", "linked-b")] }),
+  bead("linked-b", { title: "Beta task", labels: ["infra"] }),
+  // A near-miss label: selecting `infra` must not match `infrastructure`.
+  bead("sim-label", { title: "Gamma task", labels: ["infrastructure"] }),
   bead("epic", { issue_type: "epic" }),
   bead("nested", { issue_type: "epic", dependencies: [dep("nested", "epic", "parent-child")] }),
   bead("child", { dependencies: [dep("child", "nested", "parent-child")] }),
-  bead("archived", { labels: ["archived"] }),
+  // `retired`/`former` exist only on an archived bead: neither may be offered
+  // as a filter option, since the canvas excludes archived beads.
+  bead("archived", { labels: ["archived", "retired"], assignee: "former" }),
 ];
 const browser = await chromium.launch();
 try {
@@ -56,6 +62,18 @@ try {
   await page.locator('.react-flow__node[data-id="finished"]').waitFor({ state: "detached" });
   assert.deepEqual(await ids(), ["child", "epic", "linked-a", "linked-b", "nested"],
     "Default graph must hide closed and unlinked beads");
+  // Options come from non-archived beads only, so an archived-only label or
+  // assignee cannot offer a filter value that always returns nothing.
+  await page.getByRole("button", { name: /^Labels/ }).click();
+  await page.getByRole("menuitemcheckbox", { name: 'infra', exact: true }).waitFor();
+  assert.equal(await page.getByRole("menuitemcheckbox", { name: 'retired', exact: true }).count(), 0,
+    "Archived-only labels must not be offered");
+  await page.keyboard.press('Escape');
+  await page.getByRole("button", { name: /^Assignee/ }).click();
+  await page.getByRole("menuitemcheckbox", { name: 'alice' }).waitFor();
+  assert.equal(await page.getByRole("menuitemcheckbox", { name: 'former' }).count(), 0,
+    "Archived-only assignees must not be offered");
+  await page.keyboard.press('Escape');
   const filter = page.getByRole("checkbox", { name: "Live dependencies only" });
   await filter.uncheck();
   await page.locator('.react-flow__node[data-id="finished"]').waitFor();
@@ -79,12 +97,15 @@ try {
   await page.getByTitle("Close", { exact: true }).click();
 
   // Search matches id/title/labels/assignee; the assignee and label facets narrow
-  // the same set; Clear restores it.
+  // the same set; Clear restores it. The linked fixtures use titles that do not
+  // contain their ids, so matching on id is genuinely exercised.
   const search = page.locator('input[data-search]');
   await search.fill('linked');
   assert.deepEqual(await ids(), ['linked-a', 'linked-b'], 'Search must match bead ids');
+  await search.fill('Alpha');
+  assert.deepEqual(await ids(), ['linked-a'], 'Search must match bead titles');
   await search.fill('infra');
-  assert.deepEqual(await ids(), ['linked-b'], 'Search must match labels');
+  assert.deepEqual(await ids(), ['linked-b', 'sim-label'], 'Search must match labels by substring');
   await search.fill('alice');
   assert.deepEqual(await ids(), ['linked-a'], 'Search must match assignees');
   await search.fill('');
@@ -96,12 +117,25 @@ try {
   await page.getByRole('menuitemcheckbox', { name: 'alice' }).click();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: /^Labels/ }).click();
-  await page.getByRole('menuitemcheckbox', { name: 'infra' }).click();
+  // `exact` selects `infra` without also matching the near-miss `infrastructure`.
+  await page.getByRole('menuitemcheckbox', { name: 'infra', exact: true }).click();
   await page.keyboard.press('Escape');
-  assert.deepEqual(await ids(), ['linked-b'], 'Label filter must narrow by exact label');
+  assert.deepEqual(await ids(), ['linked-b'], 'Label filter must match exact labels only');
   await page.getByRole('button', { name: /^Clear/ }).click();
   assert.deepEqual(await ids(), beads.filter((b) => b.id !== 'archived').map((b) => b.id).sort(),
     'Clear must restore every bead');
+
+  // Live-only judges connectivity from the unfiltered graph: matching one endpoint
+  // while its linked neighbor is filtered out must not hide the match as unlinked.
+  await page.getByRole("checkbox", { name: "Live dependencies only" }).check();
+  await search.fill('alice');
+  assert.deepEqual(await ids(), ['linked-a'], 'A linked match must survive live-only pruning');
+  await page.getByLabel('Graph scope').selectOption('epic');
+  await search.fill('child');
+  assert.deepEqual(await ids(), ['child', 'epic'],
+    'Epic scope must keep a matching descendant and its anchor');
+  await search.fill('');
+  await page.getByLabel('Graph scope').selectOption('');
 
   beads.splice(0, beads.length, bead("unlinked"), bead("completed", { status: "closed" }));
   await page.reload();
@@ -159,6 +193,26 @@ try {
   await page.getByRole("button", { name: /^fit view$/i }).click();
   await page.waitForTimeout(300);
   assert.ok(await fits(), "Built-in fit control must fit large graphs too");
+  // Clearing a filter that restored nodes must re-fit to the measured bounds.
+  await page.locator('input[data-search]').fill('large-0');
+  await page.locator('.react-flow__node[data-id="large-219"]').waitFor({ state: 'detached' });
+  await page.locator('input[data-search]').fill('');
+  await page.locator('.react-flow__node[data-id="large-219"]').waitFor();
+  await page.waitForFunction(() => {
+    const n = document.querySelector('.react-flow__viewport');
+    return n && new DOMMatrix(getComputedStyle(n).transform).a < 0.1;
+  });
+  await page.waitForTimeout(400);
+  assert.ok(await fits(), "Clearing a filter must re-fit to the restored nodes");
+  // Layout guard: the added search/filter controls must not crush the title into
+  // an unreadable, very tall column at laptop widths.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.waitForTimeout(200);
+  const headerBox = await page.locator("header").boundingBox();
+  const titleBox = await page.locator("header > div").first().boundingBox();
+  assert.ok(headerBox && titleBox, "Graph header must render");
+  assert.ok(titleBox.width >= 200, `Header title must not be crushed (got ${titleBox?.width}px)`);
+  assert.ok(headerBox.height <= 200, `Header must not balloon (got ${headerBox?.height}px)`);
   assert.deepEqual(errors, []);
   console.log("PASS: default pruning, opt-in full graph, unique nested epics, drag-to-link, closed-task details, empty-filter recovery, and wrapped layout");
 } finally {
