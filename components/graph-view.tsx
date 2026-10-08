@@ -392,7 +392,10 @@ export function GraphView() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex flex-shrink-0 flex-wrap items-center gap-3 border-b border-border bg-[var(--surface)] p-[14px_22px]">
-        <div className="grow shrink-0 basis-[240px]">
+        {/* Full-width first row: the title and its scope/status sentence read as
+            one line instead of being squeezed into a narrow column beside the
+            controls. The controls wrap onto the second row. */}
+        <div className="flex w-full basis-full flex-wrap items-baseline gap-x-[10px] gap-y-1">
           <h1 className="m-0 text-base font-[650] tracking-[-.01em]">Dependency graph</h1>
           <span className="text-[11.5px] text-[var(--text-3)]">
             {effectiveEpicId

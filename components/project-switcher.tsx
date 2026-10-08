@@ -17,11 +17,14 @@ export function ProjectSwitcher({
   projectId,
   kind,
   live,
+  collapsed,
 }: {
   projectId: string;
   kind?: "bd" | "demo";
   /** Whether the SSE change stream is connected (real projects only). */
   live?: boolean;
+  /** Icon-rail mode: show only the status dot, with the project name as a tooltip. */
+  collapsed?: boolean;
 }) {
   const router = useRouter();
   const { data } = useProjects();
@@ -51,15 +54,26 @@ export function ProjectSwitcher({
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger className="mb-[6px] flex w-full items-center gap-[9px] rounded-[10px] border border-border bg-[var(--surface-2)] px-[11px] py-[9px] text-left hover:bg-[var(--surface-3)] focus:outline-none">
+        <DropdownMenuTrigger
+          title={collapsed ? currentName : undefined}
+          className={
+            collapsed
+              ? "mb-[6px] flex w-full items-center justify-center rounded-[10px] border border-border bg-[var(--surface-2)] py-[9px] hover:bg-[var(--surface-3)] focus:outline-none"
+              : "mb-[6px] flex w-full items-center gap-[9px] rounded-[10px] border border-border bg-[var(--surface-2)] px-[11px] py-[9px] text-left hover:bg-[var(--surface-3)] focus:outline-none"
+          }
+        >
           {dot}
-          <div className="min-w-0 flex-1 leading-[1.15]">
-            <div className="truncate text-[13px] font-[600] text-[var(--text)]">{currentName}</div>
-            <div className="text-[10.5px] text-[var(--text-3)]">
-              {isDemo ? "sample data" : isLive ? "bd · live" : "bd · project"}
-            </div>
-          </div>
-          <ChevronsUpDown size={14} className="flex-shrink-0 text-[var(--text-3)]" />
+          {!collapsed && (
+            <>
+              <div className="min-w-0 flex-1 leading-[1.15]">
+                <div className="truncate text-[13px] font-[600] text-[var(--text)]">{currentName}</div>
+                <div className="text-[10.5px] text-[var(--text-3)]">
+                  {isDemo ? "sample data" : isLive ? "bd · live" : "bd · project"}
+                </div>
+              </div>
+              <ChevronsUpDown size={14} className="flex-shrink-0 text-[var(--text-3)]" />
+            </>
+          )}
         </DropdownMenuTrigger>
 
         <DropdownMenuContent className="w-[210px]">
