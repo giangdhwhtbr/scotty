@@ -6,6 +6,9 @@ import {
   Controls,
   Handle,
   Position,
+  useNodesInitialized,
+  useReactFlow,
+  useStoreApi,
   type Node,
   type Edge,
   type Connection,
@@ -94,6 +97,37 @@ function BeadNode({ data }: NodeProps) {
 }
 
 const nodeTypes = { bead: BeadNode };
+
+/**
+ * Re-fit the viewport whenever the set of visible nodes changes, but only once
+ * React Flow has measured the newly added nodes. Fitting earlier uses incomplete
+ * bounds (unmeasured nodes report zero size), so filter-revealed beads stay
+ * off-screen until the user centers the graph manually.
+ */
+function GraphViewportRefit({ ids }: { ids: string[] }) {
+  const nodesInitialized = useNodesInitialized();
+  const store = useStoreApi();
+  const { fitView } = useReactFlow();
+  const signature = ids.join("|");
+  const applied = React.useRef(signature);
+  React.useEffect(() => {
+    if (applied.current === signature || !nodesInitialized) return;
+    // `nodesInitialized` can still read as true on the render that first adds the
+    // new nodes; confirm the store actually reports them measured before fitting.
+    const measured = new Set(
+      store
+        .getState()
+        .nodes.filter(
+          (node) => node.measured?.width != null && node.measured?.height != null,
+        )
+        .map((node) => node.id),
+    );
+    if (!ids.every((id) => measured.has(id))) return;
+    applied.current = signature;
+    fitView({ padding: 0.2, minZoom: 0.02, duration: 400 });
+  }, [ids, signature, nodesInitialized, store, fitView]);
+  return null;
+}
 
 const FLOW_BLOCKING = new Set(["blocks", "conditional-blocks", "waits-for"]);
 
@@ -268,8 +302,20 @@ export function GraphView() {
   );
   const effectiveEpicId = epics.some((epic) => epic.id === epicId) ? epicId : "";
 
-  const labelOptions = React.useMemo(() => labelOptionsFrom(beads), [beads]);
-  const assigneeOptions = React.useMemo(() => assigneeOptionsFrom(beads), [beads]);
+  // Archived beads never render, so an option drawn only from them would filter
+  // down to an empty graph. Build the menus from the set the canvas actually uses.
+  const nonArchived = React.useMemo(
+    () => beads.filter((bead) => !(bead.labels ?? []).includes("archived")),
+    [beads],
+  );
+  const labelOptions = React.useMemo(
+    () => labelOptionsFrom(nonArchived),
+    [nonArchived],
+  );
+  const assigneeOptions = React.useMemo(
+    () => assigneeOptionsFrom(nonArchived),
+    [nonArchived],
+  );
   const filters: Filters = React.useMemo(
     () => ({ status: [], type: [], priority: [], origin: [], labels, assignee: assignees, search }),
     [labels, assignees, search],
@@ -286,39 +332,34 @@ export function GraphView() {
   // by default ("Live dependencies only" starts checked); epic scope additionally
   // adds only direct outside neighbors.
   const { nodes, edges, considered } = React.useMemo(() => {
-    const nonArchived = beads.filter((bead) => !(bead.labels ?? []).includes("archived"));
     const matched = nonArchived.filter((bead) => matchesFilters(bead, filters, humanAllowlist));
+    const matchedIds = new Set(matched.map((bead) => bead.id));
     if (effectiveEpicId) {
-      // Keep the scoped epic visible even when it doesn't match the filters, so the
-      // user retains scope context.
-      const anchor = nonArchived.find((bead) => bead.id === effectiveEpicId);
-      const pool =
-        !anchor || matched.some((bead) => bead.id === effectiveEpicId)
-          ? matched
-          : [anchor, ...matched];
-      const scope = buildEpicGraphScope(pool, effectiveEpicId);
-      const visible = liveOnly
+      // Resolve scope and live connectivity against the UNFILTERED beads, then
+      // narrow to matches. Filtering first drops a matching bead whose linked
+      // endpoint failed the filter, which hides it as though it were unlinked.
+      const scope = buildEpicGraphScope(nonArchived, effectiveEpicId);
+      const live = liveOnly
         ? liveGraphBeads(scope.beads, new Set([effectiveEpicId]))
         : scope.beads;
+      // Keep the scoped epic visible even when it doesn't match the filters, so the
+      // user retains scope context.
+      const visible = live.filter(
+        (bead) => bead.id === effectiveEpicId || matchedIds.has(bead.id),
+      );
       return {
         ...epicLayout(visible, activateNode, scope.outsideIds),
         // Pre-facet scope size so `hidden` and the empty state reflect facet losses.
-        considered: buildEpicGraphScope(nonArchived, effectiveEpicId).beads.length,
+        considered: scope.beads.length,
       };
     }
-    const visible = liveOnly ? liveGraphBeads(matched) : matched;
+    // Live connectivity comes from the unfiltered set for the same reason: a match
+    // whose only linked neighbor was filtered out is still live, not unlinked.
+    const liveIds = new Set(liveGraphBeads(nonArchived).map((bead) => bead.id));
+    const visible = liveOnly ? matched.filter((bead) => liveIds.has(bead.id)) : matched;
     return { ...layout(visible, activateNode), considered: nonArchived.length };
-  }, [beads, activateNode, effectiveEpicId, liveOnly, filters, humanAllowlist]);
-  const visibleIds = React.useMemo(
-    () => nodes.map((node) => node.id).sort().join("|"),
-    [nodes],
-  );
-  const previousVisibleIds = React.useRef(visibleIds);
-  React.useEffect(() => {
-    if (previousVisibleIds.current === visibleIds) return;
-    previousVisibleIds.current = visibleIds;
-    center();
-  }, [visibleIds, center]);
+  }, [nonArchived, activateNode, effectiveEpicId, liveOnly, filters, humanAllowlist]);
+  const visibleIds = React.useMemo(() => nodes.map((node) => node.id), [nodes]);
   const hidden = Math.max(0, considered - nodes.length);
   const focus = React.useMemo(() => {
     if (!spotlight || !focusId || !nodes.some(n => n.id === focusId)) return null;
@@ -351,7 +392,7 @@ export function GraphView() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex flex-shrink-0 flex-wrap items-center gap-3 border-b border-border bg-[var(--surface)] p-[14px_22px]">
-        <div className="flex-1">
+        <div className="grow shrink-0 basis-[240px]">
           <h1 className="m-0 text-base font-[650] tracking-[-.01em]">Dependency graph</h1>
           <span className="text-[11.5px] text-[var(--text-3)]">
             {effectiveEpicId
@@ -504,6 +545,7 @@ export function GraphView() {
         >
           <Background gap={22} color="var(--border)" />
           <Controls fitViewOptions={{ padding: 0.2, minZoom: 0.02 }} />
+          <GraphViewportRefit ids={visibleIds} />
         </ReactFlow>
         </SpotlightContext.Provider>
         {nodes.length === 0 && (
