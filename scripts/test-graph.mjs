@@ -212,6 +212,12 @@ try {
   const titleBox = await page.locator("header > div").first().boundingBox();
   assert.ok(headerBox && titleBox, "Graph header must render");
   assert.ok(titleBox.width >= 200, `Header title must not be crushed (got ${titleBox?.width}px)`);
+  // The title row must own the full header width so it never squeezes into a
+  // narrow column beside the controls; the controls wrap onto the next row.
+  assert.ok(
+    titleBox.width >= headerBox.width * 0.8,
+    `Header title row must span the header width (got ${titleBox?.width}px of ${headerBox?.width}px)`,
+  );
   assert.ok(headerBox.height <= 200, `Header must not balloon (got ${headerBox?.height}px)`);
   assert.deepEqual(errors, []);
   console.log("PASS: default pruning, opt-in full graph, unique nested epics, drag-to-link, closed-task details, empty-filter recovery, and wrapped layout");
