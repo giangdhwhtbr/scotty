@@ -1,9 +1,12 @@
 {
   "name": "bead-me-up-scotty",
   "version": "0.4.0",
-  "private": true,
   "license": "MIT",
   "author": "Brendan <brendan@appstart.one>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/giangdhwhtbr/scotty.git"
+  },
   "bin": {
     "bead-me-up-scotty": "bin/bead-me-up-scotty.mjs",
     "scotty": "bin/bead-me-up-scotty.mjs"
@@ -22,7 +25,8 @@
     "build": "next build",
     "start": "next start",
     "serve": "node scripts/serve.mjs",
-    "lint": "eslint"
+    "lint": "eslint",
+    "prepack": "node -e \"require('fs').rmSync('.next/cache',{recursive:true,force:true})\""
   },
   "dependencies": {
     "@11ty/eleventy": "^3.1.6",

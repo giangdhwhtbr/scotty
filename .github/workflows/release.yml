@@ -1,0 +1,57 @@
+name: release
+
+# Cut a release by tagging: `npm version patch -m "chore(release): v%s"` then
+# `git push --follow-tags`. This workflow builds the prebuilt `.next` that the
+# app serves at runtime (it never builds on the user's machine), publishes the
+# package to npm, and creates a GitHub Release so the in-app Stable updater
+# (which reads releases/latest) can offer it.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release with the token below
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so next.config.ts can bake the real commit count/sha.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      - name: Build
+        run: |
+          rm -rf .next
+          npm run build
+
+      - name: Publish to npm
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          if [[ "$name" == @* ]]; then
+            npm publish --access public
+          else
+            npm publish
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Pack release tarball
+        run: npm pack
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "$GITHUB_REF_NAME" ./*.tgz \
+            --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
